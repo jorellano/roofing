@@ -31,7 +31,7 @@ function step(text) {
   const li = document.createElement("li"); li.className = "wait"; li.textContent = text; statusUl.appendChild(li);
   return { ok: (t) => { li.className = "ok"; if (t) li.textContent = t; }, bad: (t) => { li.className = "bad"; if (t) li.textContent = t; } };
 }
-const ASSET_V = "20261125";
+const ASSET_V = "20261125c";
 const asset = (path) => path + (path.includes("?") ? "&" : "?") + "v=" + ASSET_V;
 function showFail(msg) {
   const el = $("fail"); if (!el) return;
@@ -449,8 +449,106 @@ function drawOutline(ringM, parcelM) {
   </svg>`;
 }
 
+
+/* ---------- map (Leaflet + Esri World Imagery, no Google) ---------- */
+let mapObj = null, satLayer = null, streetLayer = null, featGroup = null, pinMarker = null;
+
+function ringToLatLngs(ring) { return ring.map(([lon, lat]) => [lat, lon]); }
+function ringKey(ring) {
+  if (!ring || !ring.length) return "";
+  const [lon, lat] = ring[0];
+  return ring.length + ":" + lon.toFixed(6) + "," + lat.toFixed(6);
+}
+function otherFootprints(cands, pick, proj) {
+  const out = []; const seen = new Set([ringKey(pick && pick.ring)]);
+  for (const c of cands || []) {
+    const key = ringKey(c.ring); if (seen.has(key)) continue;
+    const a = Math.abs(ringArea(c.ring.map(proj.fwd))) * SQFT;
+    if (a < 600) continue;
+    const b = bbox(c.ring.map(proj.fwd)); const cx = (b[0] + b[2]) / 2, cy = (b[1] + b[3]) / 2;
+    let dup = false;
+    for (const prev of out) {
+      const pb = bbox(prev.ring.map(proj.fwd));
+      if (Math.hypot((pb[0] + pb[2]) / 2 - cx, (pb[1] + pb[3]) / 2 - cy) < 3) { dup = true; break; }
+    }
+    if (dup) continue;
+    seen.add(key); out.push(c);
+  }
+  return out;
+}
+function ensureMap() {
+  if (mapObj || typeof L === "undefined") return;
+  L.Icon.Default.imagePath = "vendor/leaflet/images/";
+  satLayer = L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
+    maxZoom: 20, maxNativeZoom: 19,
+    attribution: 'Tiles &copy; <a href="https://www.esri.com/">Esri</a> &mdash; Esri, Maxar, Earthstar Geographics, and the GIS User Community',
+  });
+  streetLayer = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 20, maxNativeZoom: 19,
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+  });
+  mapObj = L.map("map", { zoomControl: true, attributionControl: true, maxZoom: 20 });
+  satLayer.addTo(mapObj);
+  L.control.layers({ "Satellite": satLayer, "Streets": streetLayer }, null, { position: "topright" }).addTo(mapObj);
+  featGroup = L.layerGroup().addTo(mapObj);
+}
+function applyPick(pick, userPicked) {
+  const proj = projector(state.ref.lon, state.ref.lat);
+  const ringM = pick.ring.map(proj.fwd);
+  state.plan = Math.abs(ringArea(ringM)) * SQFT;
+  state.ring = pick.ring; state.pick = pick;
+  state.lidar = null; state.pitch = String(DEFAULT_PITCH); state.userPitch = false;
+  drawOutline(ringM, state.parcel ? state.parcel.ring.map(proj.fwd) : null);
+  const notes = [];
+  if (userPicked) notes.push("You picked this roof on the map.");
+  else if (pick.conf === "high") notes.push(`Outline: ${pick.why}.`);
+  else notes.push(`Check this outline: ${pick.why}.`);
+  if (pick.edge) notes.push("The outline touches a map tile edge and may be cut short.");
+  if (state.osmBusy) notes.push("The live OpenStreetMap server was busy, so outlines came from Overture (which includes OpenStreetMap outlines).");
+  state.notes = notes; state.noteGood = !userPicked && pick.conf === "high" && !pick.edge;
+  chips(); render();
+  showMap();
+}
+function showMap() {
+  const hint = $("map-hint");
+  if (typeof L === "undefined") {
+    if (hint) hint.textContent = "The map could not load, but the measurement above is still valid.";
+    return;
+  }
+  ensureMap();
+  featGroup.clearLayers(); pinMarker = null;
+  const pick = state.pick, proj = projector(state.ref.lon, state.ref.lat);
+  if (state.parcel) {
+    L.polygon(ringToLatLngs(state.parcel.ring), {
+      color: "#f5e6a8", weight: 1.5, dashArray: "5 4", opacity: 0.95, fill: false, interactive: false,
+    }).addTo(featGroup);
+  }
+  const others = otherFootprints(state.cands, pick, proj);
+  for (const c of others) {
+    const poly = L.polygon(ringToLatLngs(c.ring), {
+      color: "#ffffff", weight: 1.25, opacity: 0.75, fillColor: "#ffffff", fillOpacity: 0.08, className: "map-other-roof",
+    });
+    poly.on("click", (e) => { L.DomEvent.stopPropagation(e); applyPick(c, true); });
+    poly.addTo(featGroup);
+  }
+  L.polygon(ringToLatLngs(pick.ring), {
+    color: "#1f6feb", weight: 3, opacity: 1, fillColor: "#1f6feb", fillOpacity: 0.32, interactive: false,
+  }).addTo(featGroup);
+  if (state.pin) {
+    pinMarker = L.marker([state.pin.lat, state.pin.lon], { title: "Geocoded address", keyboard: false });
+    pinMarker.addTo(featGroup);
+  }
+  if (hint) hint.textContent = others.length ? "Tap another roof if this isn’t the right house." : "";
+  const bounds = L.latLngBounds(ringToLatLngs(pick.ring));
+  if (state.pin) bounds.extend([state.pin.lat, state.pin.lon]);
+  const fit = () => { mapObj.invalidateSize(); mapObj.fitBounds(bounds, { padding: [28, 28], maxZoom: 20 }); };
+  requestAnimationFrame(fit);
+  setTimeout(fit, 250);
+}
+
 let running = false;
 async function run(ev) {
+
   if (ev && ev.preventDefault) ev.preventDefault();
   const addr = $("addr").value.trim();
   if (!addr) { showFail("Type a street address to measure the roof."); return; }
@@ -463,9 +561,8 @@ async function run(ev) {
   history.replaceState(null, "", next.pathname + next.search + next.hash);
   try {
     const pa = parseAddr(addr);
-    let s = step("Finding the address");
-    let geo = null; try { geo = await geocode(addr); } catch (e) { s.bad(e.message + " Trying county parcels."); }
-    s = step("Looking up the county parcel");
+    let geo = null; try { geo = await geocode(addr); } catch (e) { console.warn("geocode", e); }
+    const s = step("Looking up the county parcel");
     let parcel = await parcelLookup(pa, geo);
     if (parcel && parcel.error) { s.bad(parcel.error); parcel = null; }
     else if (parcel) s.ok(`Parcel ${parcel.apn} found (${parcel.county})`);
@@ -476,7 +573,6 @@ async function run(ev) {
     const proj = projector(ref.lon, ref.lat);
     let radius = 60; if (parcel) { const b = bbox(parcel.ring.map(proj.fwd)); radius = Math.max(40, Math.hypot(b[2] - b[0], b[3] - b[1]) / 2 + 15); }
     const bb = [proj.inv([-radius, -radius]), proj.inv([radius, radius])]; const bboxLL = [bb[0][0], bb[0][1], bb[1][0], bb[1][1]];
-    s = step("Finding the roof outline");
     const [osm, ov] = await Promise.allSettled([osmBuildings(ref.lon, ref.lat, radius), overtureBuildings(bboxLL)]);
     const cands = [...(osm.status === "fulfilled" ? osm.value : []), ...(ov.status === "fulfilled" ? ov.value : [])];
     if (!cands.length) {
@@ -484,26 +580,23 @@ async function run(ev) {
         osm.status !== "fulfilled" ? "OpenStreetMap was busy or blocked" : "no OpenStreetMap outline",
         ov.status !== "fulfilled" ? ("the building map failed" + (ov.reason && ov.reason.message ? " (" + ov.reason.message + ")" : "")) : "no Overture outline",
       ].join("; ");
-      s.bad("No building outline found here");
       throw new Error("No building outline found near this address (" + why + "). Try again in a moment.");
     }
     const pick = choose(cands, parcel, ref, pa, proj);
-    if (!pick) { s.bad("No building outline found here"); throw new Error("No building outline found near this address in OpenStreetMap or Overture."); }
-    // outline found (not shown)
-    const ringM = pick.ring.map(proj.fwd);
-    state.plan = Math.abs(ringArea(ringM)) * SQFT; state.ring = pick.ring; state.geo = ref;
+    if (!pick) throw new Error("No building outline found near this address in OpenStreetMap or Overture.");
+    state.ref = ref; state.geo = ref; state.parcel = parcel; state.cands = cands; state.pick = pick;
+    state.pin = geo ? { lon: geo.lon, lat: geo.lat } : null;
+    state.osmBusy = osm.status !== "fulfilled";
     $("r-addr").textContent = parcel ? `${parcel.situs} · APN ${parcel.apn}` : addr;
-    drawOutline(ringM, parcel ? parcel.ring.map(proj.fwd) : null);
-    const notes = [];
-    if (pick.conf === "high") notes.push(`Outline: ${pick.why}.`); else notes.push(`Check this outline: ${pick.why}.`);
-    if (pick.edge) notes.push("The outline touches a map tile edge and may be cut short.");
-    if (osm.status !== "fulfilled") notes.push("The live OpenStreetMap server was busy, so outlines came from Overture (which includes OpenStreetMap outlines).");
-    state.notes = notes; state.noteGood = pick.conf === "high" && !pick.edge;
+    $("r-src").innerHTML = "";
     if (geo) addSource(`Geocoding: ${geo.src}`, geo.src.startsWith("Nominatim") ? "https://nominatim.openstreetmap.org/" : "https://photon.komoot.io/");
     if (parcel) addSource(`Parcel: ${parcel.label}, APN ${parcel.apn}`, parcel.url);
     addSource(`Outline: ${pick.source}${pick.id ? " " + String(pick.id).slice(0, 12) : ""}`, pick.source === "OpenStreetMap" ? "https://www.openstreetmap.org/" + pick.id : "https://docs.overturemaps.org/guides/buildings/");
-    chips(); render(); $("result").style.display = "block";
-    window.__result = { plan: state.plan, source: pick.source, conf: pick.conf, why: pick.why, apn: parcel?.apn, osm: osm.status, overture: ov.status, geo: geo?.src };
+    addSource("Basemap: Esri World Imagery and OpenStreetMap", "https://www.esri.com/");
+    applyPick(pick, false);
+    $("result").style.display = "block";
+    showMap();
+    window.__result = { plan: state.plan, source: pick.source, conf: pick.conf, why: pick.why, apn: parcel?.apn, osm: osm.status, overture: ov.status, geo: geo?.src, pin: state.pin };
   } catch (e) {
     const msg = e.message || "Something went wrong while measuring this roof. Try again.";
     step(msg).bad(); showFail(msg); window.__result = { error: msg };

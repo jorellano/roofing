@@ -53,7 +53,13 @@
   .chips button.on { background: var(--ink); color: var(--bg); border-color: var(--ink); }
   .note { margin-top: 22px; padding: 12px 14px; border-radius: 12px; font-size: 14px; background: var(--warnbg); color: var(--warn); }
   .note.good { background: transparent; border: 1px solid var(--line); color: var(--soft); }
-  svg { display:block; width:100%; height:auto; margin-top: 18px; }
+  #r-svg svg { display:block; width:100%; height:auto; margin-top: 18px; }
+  #map-wrap { margin: 18px -22px 0; width: calc(100% + 44px); }
+  #map { height: 300px; width: 100%; background: #cfd4da; z-index: 0; }
+  .map-hint { font-size: 13px; color: var(--soft); margin: 8px 22px 0; }
+  .leaflet-container { font: 12px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  .leaflet-control-layers { border:0 !important; border-radius: 12px !important; overflow: hidden; box-shadow: 0 1px 4px rgba(0,0,0,.25) !important; }
+  .leaflet-bar { border:0 !important; border-radius: 12px !important; overflow: hidden; box-shadow: 0 1px 4px rgba(0,0,0,.25) !important; }
   details { margin-top: 26px; font-size: 13.5px; color: var(--soft); }
   details summary { cursor: pointer; }
   details li { margin: 6px 0; }
@@ -82,6 +88,10 @@
       <div><b id="r-pitch"></b><span id="r-pitchsrc">pitch</span></div>
     </div>
     <div class="faces" id="r-faces"></div>
+    <div id="map-wrap">
+      <div id="map" role="region" aria-label="Map of the measured house"></div>
+      <p class="map-hint" id="map-hint"></p>
+    </div>
     <div class="label">Waste</div>
     <div class="chips" id="waste"></div>
     <div class="label">Pitch</div>
@@ -95,8 +105,10 @@
     </details>
   </section>
 </main>
-<script src="vendor/pmtiles.js?v=20261125b"></script>
-<script src="vendor/laz-perf.js?v=20261125b"></script>
-<script src="app.js?v=20261125b"></script>
+<link rel="stylesheet" href="vendor/leaflet/leaflet.css?v=20261125c">
+<script src="vendor/leaflet/leaflet.js?v=20261125c"></script>
+<script src="vendor/pmtiles.js?v=20261125c"></script>
+<script src="vendor/laz-perf.js?v=20261125c"></script>
+<script src="app.js?v=20261125c"></script>
 </body>
 </html>
