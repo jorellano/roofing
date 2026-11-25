@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#ffffff">
+<title>Roof Measure</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M4 16 16 6l12 10v12H4z' fill='%231a73e8'/%3E%3C/svg%3E">
+<style>
+  :root { --ink:#111; --soft:#6b6b6b; --line:#e6e6e6; --accent:#1f6feb; --bg:#fff; --warn:#9a5b00; --warnbg:#fff6e5; }
+  @media (prefers-color-scheme: dark) { :root { --ink:#f2f2f2; --soft:#a0a0a0; --line:#2c2c2c; --accent:#5b9dff; --bg:#0f0f0f; --warn:#ffcc80; --warnbg:#2a2110; } }
+  * { box-sizing: border-box; }
+  html, body { margin:0; background:var(--bg); color:var(--ink); font: 16px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; -webkit-text-size-adjust:100%; }
+  main { max-width: 520px; margin: 0 auto; padding: calc(28px + env(safe-area-inset-top)) 22px 48px; }
+  h1 { font-size: 22px; font-weight: 650; margin: 0 0 4px; letter-spacing: -0.01em; }
+  .sub { color: var(--soft); margin: 0 0 26px; font-size: 15px; }
+  .field { display:flex; flex-direction:column; gap:12px; }
+  input[type=text] { width:100%; font-size:17px; padding:15px 16px; border:1px solid var(--line); border-radius:14px; background:transparent; color:var(--ink); outline:none; }
+  input[type=text]:focus { border-color: var(--accent); }
+  button.go { font-size:17px; font-weight:600; padding:15px; border:0; border-radius:14px; background:var(--accent); color:#fff; cursor:pointer; }
+  button.go:disabled { opacity:.55; }
+  #status { margin: 22px 0 0; color: var(--soft); font-size: 14px; min-height: 20px; }
+  #status li { list-style: none; margin: 4px 0; }
+  #status ul { padding: 0; margin: 0; }
+  .ok::before { content: "✓ "; color: var(--accent); }
+  .wait::before { content: "… "; }
+  .bad::before { content: "– "; }
+  #result { display:none; margin-top: 30px; }
+  .addr { color: var(--soft); font-size: 14px; margin-bottom: 6px; }
+  .big { font-size: 64px; font-weight: 700; letter-spacing: -0.03em; line-height: 1; }
+  .big small { font-size: 20px; font-weight: 500; color: var(--soft); letter-spacing: 0; margin-left: 6px; }
+  .bigsub { color: var(--soft); font-size: 14px; margin-top: 8px; }
+  .row { display:grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 26px 0 8px; }
+  .row div { border-top: 1px solid var(--line); padding-top: 10px; }
+  .row b { display:block; font-size: 18px; font-weight: 650; }
+  .row span { color: var(--soft); font-size: 12.5px; }
+  .label { font-size: 13px; color: var(--soft); margin: 24px 0 8px; }
+  .chips { display:flex; flex-wrap:wrap; gap:8px; }
+  .chips button { font-size: 14px; padding: 8px 13px; border-radius: 999px; border:1px solid var(--line); background: transparent; color: var(--ink); cursor:pointer; }
+  .chips button.on { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+  .note { margin-top: 22px; padding: 12px 14px; border-radius: 12px; font-size: 14px; background: var(--warnbg); color: var(--warn); }
+  .note.good { background: transparent; border: 1px solid var(--line); color: var(--soft); }
+  svg { display:block; width:100%; height:auto; margin-top: 18px; }
+  details { margin-top: 26px; font-size: 13.5px; color: var(--soft); }
+  details summary { cursor: pointer; }
+  details li { margin: 6px 0; }
+  a { color: var(--accent); }
+  .faces { font-size: 13.5px; color: var(--soft); margin-top: 8px; }
+</style>
+</head>
+<body>
+<main>
+<a href="../" style="display:inline-block;margin:0 0 14px;font-size:14px;font-weight:600;color:var(--accent);text-decoration:none">&lsaquo; Back to Roof Guide</a>
+  <h1>Roof Measure</h1>
+  <p class="sub">Type an address. Get roof squares from open map data and USGS lidar.</p>
+  <div class="field">
+    <input id="addr" type="text" inputmode="text" autocomplete="street-address" placeholder="21050 Kimberly Ct, Lake Elsinore, CA 92532" enterkeyhint="go">
+    <button id="go" class="go">Measure roof</button>
+  </div>
+  <div id="status"><ul></ul></div>
+  <section id="result">
+    <div class="addr" id="r-addr"></div>
+    <div class="big"><span id="r-sq">0</span><small>squares</small></div>
+    <div class="bigsub" id="r-sqsub"></div>
+    <div class="row">
+      <div><b id="r-sloped"></b><span>sloped sq ft</span></div>
+      <div><b id="r-plan"></b><span>plan sq ft</span></div>
+      <div><b id="r-pitch"></b><span id="r-pitchsrc">pitch</span></div>
+    </div>
+    <div class="faces" id="r-faces"></div>
+    <div class="label">Waste</div>
+    <div class="chips" id="waste"></div>
+    <div class="label">Pitch</div>
+    <div class="chips" id="pitch"></div>
+    <div id="r-svg"></div>
+    <div class="note" id="r-note"></div>
+    <details>
+      <summary>Data sources and method</summary>
+      <ul id="r-src"></ul>
+      <p>Sloped area = plan area × √(1 + (rise/12)²), per roof face. Squares = sloped area × (1 + waste) ÷ 100. Footprints are traced roof outlines (usually including eaves). Confirm pitch on site before a bid.</p>
+    </details>
+  </section>
+</main>
+<script src="vendor/pmtiles.js"></script>
+<script src="vendor/laz-perf.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
