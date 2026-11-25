@@ -4,7 +4,17 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#ffffff">
+<meta name="referrer" content="origin">
 <title>Roof Measure</title>
+<script>
+/* Keep a trailing slash so relative scripts (app.js, vendor/…) resolve on /repo or /repo/measure, not the parent path. */
+(function () {
+  var p = location.pathname;
+  if (p && p.slice(-1) !== "/" && !/\.[a-zA-Z0-9]+$/.test(p)) {
+    location.replace(p + "/" + location.search + location.hash);
+  }
+})();
+</script>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M4 16 16 6l12 10v12H4z' fill='%231a73e8'/%3E%3C/svg%3E">
 <style>
   :root { --ink:#111; --soft:#6b6b6b; --line:#e6e6e6; --accent:#1f6feb; --bg:#fff; --warn:#9a5b00; --warnbg:#fff6e5; }
@@ -24,7 +34,10 @@
   #status ul { padding: 0; margin: 0; }
   .ok::before { content: "✓ "; color: var(--accent); }
   .wait::before { content: "… "; }
+  .bad { color: var(--warn); }
   .bad::before { content: "– "; }
+  #fail { display:none; margin-top: 18px; }
+  #fail.on { display:block; }
   #result { display:none; margin-top: 30px; }
   .addr { color: var(--soft); font-size: 14px; margin-bottom: 6px; }
   .big { font-size: 64px; font-weight: 700; letter-spacing: -0.03em; line-height: 1; }
@@ -53,11 +66,12 @@
 <a href="../" style="display:inline-block;margin:0 0 14px;font-size:14px;font-weight:600;color:var(--accent);text-decoration:none">&lsaquo; Back to Roof Guide</a>
   <h1>Roof Measure</h1>
   <p class="sub">Type an address. Get roof squares from open map data and USGS lidar.</p>
-  <div class="field">
-    <input id="addr" type="text" inputmode="text" autocomplete="street-address" placeholder="21050 Kimberly Ct, Lake Elsinore, CA 92532" enterkeyhint="go">
-    <button id="go" class="go">Measure roof</button>
-  </div>
+  <form id="form" class="field" action="./" method="get">
+    <input id="addr" name="a" type="text" inputmode="text" autocomplete="street-address" placeholder="21050 Kimberly Ct, Lake Elsinore, CA 92532" enterkeyhint="go">
+    <button id="go" class="go" type="submit">Measure roof</button>
+  </form>
   <div id="status"><ul></ul></div>
+  <div id="fail" class="note" role="alert"></div>
   <section id="result">
     <div class="addr" id="r-addr"></div>
     <div class="big"><span id="r-sq">0</span><small>squares</small></div>
@@ -81,8 +95,8 @@
     </details>
   </section>
 </main>
-<script src="vendor/pmtiles.js"></script>
-<script src="vendor/laz-perf.js"></script>
-<script src="app.js"></script>
+<script src="vendor/pmtiles.js?v=20261125"></script>
+<script src="vendor/laz-perf.js?v=20261125"></script>
+<script src="app.js?v=20261125"></script>
 </body>
 </html>

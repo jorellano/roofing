@@ -31,10 +31,27 @@ function step(text) {
   const li = document.createElement("li"); li.className = "wait"; li.textContent = text; statusUl.appendChild(li);
   return { ok: (t) => { li.className = "ok"; if (t) li.textContent = t; }, bad: (t) => { li.className = "bad"; if (t) li.textContent = t; } };
 }
+const ASSET_V = "20261125";
+const asset = (path) => path + (path.includes("?") ? "&" : "?") + "v=" + ASSET_V;
+function showFail(msg) {
+  const el = $("fail"); if (!el) return;
+  if (msg) { el.textContent = msg; el.classList.add("on"); }
+  else { el.textContent = ""; el.classList.remove("on"); }
+}
 async function fetchJSON(url, opts = {}, ms = 20000) {
   const c = new AbortController(); const t = setTimeout(() => c.abort(), ms);
-  try { const r = await fetch(url, { ...opts, signal: c.signal }); if (!r.ok) throw new Error("HTTP " + r.status); return await r.json(); }
-  finally { clearTimeout(t); }
+  try {
+    const r = await fetch(url, { credentials: "omit", referrerPolicy: "origin", ...opts, signal: c.signal });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    return await r.json();
+  } catch (e) {
+    if (e && e.name === "AbortError") throw new Error("Timed out");
+    throw e;
+  } finally { clearTimeout(t); }
+}
+function netFail(e) {
+  const m = (e && e.message) ? e.message : String(e || "");
+  return /Timed out|Failed to fetch|Load failed|NetworkError|HTTP \d/.test(m);
 }
 
 /* ---------- geometry helpers (local metres around a reference point) ---------- */
@@ -88,26 +105,33 @@ function parseAddr(addr) {
   return { num: m[1], street: m[2], core: core.replace(/'/g, ""), zip, city: (parts[1] || "").toUpperCase() };
 }
 async function geocode(addr) {
+  let last = null;
   try {
     const q = new URLSearchParams({ q: addr, format: "jsonv2", addressdetails: "1", limit: "1", countrycodes: "us" });
     const r = await fetchJSON("https://nominatim.openstreetmap.org/search?" + q, {}, 12000);
     if (r.length) return { lon: +r[0].lon, lat: +r[0].lat, county: r[0].address?.county || "", zip: r[0].address?.postcode || "", src: "Nominatim (OpenStreetMap)" };
-  } catch (e) { console.warn("nominatim", e); }
-  const q = new URLSearchParams({ q: addr, limit: "1", lang: "en" });
-  const r = await fetchJSON("https://photon.komoot.io/api/?" + q, {}, 12000);
-  const f = r.features && r.features[0];
-  if (!f) throw new Error("Address not found");
-  return { lon: f.geometry.coordinates[0], lat: f.geometry.coordinates[1], county: f.properties.county || "", zip: f.properties.postcode || "", src: "Photon (OpenStreetMap)" };
+  } catch (e) { console.warn("nominatim", e); last = e; }
+  try {
+    const q = new URLSearchParams({ q: addr, limit: "1", lang: "en" });
+    const r = await fetchJSON("https://photon.komoot.io/api/?" + q, {}, 12000);
+    const f = r.features && r.features[0];
+    if (f) return { lon: f.geometry.coordinates[0], lat: f.geometry.coordinates[1], county: f.properties.county || "", zip: f.properties.postcode || "", src: "Photon (OpenStreetMap)" };
+  } catch (e) { console.warn("photon", e); last = e; }
+  if (last && /429/.test(last.message)) throw new Error("Address lookup is busy right now. Wait a few seconds and try again.");
+  if (last && /403/.test(last.message)) throw new Error("Address lookup blocked this request. Try again in a moment.");
+  if (last && netFail(last)) throw new Error("Could not reach the address lookup. Check your connection and try again.");
+  throw new Error("Address not found");
 }
 
 /* ---------- 2. parcel ---------- */
 async function parcelLookup(pa, geo) {
   if (!pa.num) return null;
   const order = PARCELS[geo?.county] ? [geo.county] : Object.keys(PARCELS);
+  let network = false;
   for (const county of order) {
     const P = PARCELS[county];
     const q = new URLSearchParams({ where: P.where(pa.num, pa.core), outFields: P.fields, outSR: "4326", f: "geojson" });
-    let d; try { d = await fetchJSON(P.url + "?" + q, {}, 15000); } catch (e) { console.warn("parcel", county, e); continue; }
+    let d; try { d = await fetchJSON(P.url + "?" + q, {}, 15000); } catch (e) { console.warn("parcel", county, e); if (netFail(e)) network = true; continue; }
     let feats = (d.features || []).filter((f) => f.geometry);
     const zip = pa.zip || (geo?.zip || "").slice(0, 5);
     if (zip) { const z = feats.filter((f) => P.zip(f.properties) === zip); if (z.length) feats = z; }
@@ -119,6 +143,7 @@ async function parcelLookup(pa, geo) {
     const ring = (f.geometry.type === "MultiPolygon" ? f.geometry.coordinates[0][0] : f.geometry.coordinates[0]).map((c) => [c[0], c[1]]);
     return { ring: closeRing(ring), apn: f.properties.APN, situs: P.situs(f.properties), label: P.label, county, url: P.url.replace(/\/query$/, "") };
   }
+  if (network) return { error: "Could not reach the county parcel map. Check your connection and try again." };
   return null;
 }
 const centroidLL = (g) => { const r = g.type === "MultiPolygon" ? g.coordinates[0][0] : g.coordinates[0]; const n = r.length; return { lon: r.reduce((s, c) => s + c[0], 0) / n, lat: r.reduce((s, c) => s + c[1], 0) / n }; };
@@ -254,8 +279,8 @@ let eptIndex = null, lazMod = null;
 const merc = { fwd: ([lon, lat]) => [lon * 20037508.342789244 / 180, Math.log(Math.tan(Math.PI / 4 + lat * Math.PI / 360)) * 6378137],
   inv: ([x, y]) => [x / 20037508.342789244 * 180, (2 * Math.atan(Math.exp(y / 6378137)) - Math.PI / 2) * 180 / Math.PI] };
 async function lidarPitch(ringLL, proj, onProgress) {
-  if (!eptIndex) eptIndex = await fetchJSON("data/ept_index.json");
-  if (!lazMod) lazMod = await createLazPerf({ locateFile: (f) => "vendor/" + f });
+  if (!eptIndex) eptIndex = await fetchJSON(asset("data/ept_index.json"));
+  if (!lazMod) lazMod = await createLazPerf({ locateFile: (f) => asset("vendor/" + f) });
   const ring = ringLL.map(proj.fwd); const [bx0, by0, bx1, by1] = bbox(ring);
   const padLL = [proj.inv([bx0 - 12, by0 - 12]), proj.inv([bx1 + 12, by1 + 12])];
   const [qx0, qy0] = merc.fwd(padLL[0]), [qx1, qy1] = merc.fwd(padLL[1]);
@@ -382,22 +407,22 @@ function render() {
   document.querySelectorAll("#pitch button").forEach((b) => b.classList.toggle("on", b.dataset.v === state.pitch));
 }
 function chips() {
-  $("waste").innerHTML = ""; [0, 10, 15].forEach((v) => { const b = document.createElement("button"); b.textContent = v ? v + "%" : "None"; b.dataset.v = v;
+  $("waste").innerHTML = ""; [0, 10, 15].forEach((v) => { const b = document.createElement("button"); b.type = "button"; b.textContent = v ? v + "%" : "None"; b.dataset.v = v;
     b.onclick = () => { state.waste = v; render(); }; $("waste").appendChild(b); });
   $("pitch").innerHTML = "";
-  const lb = document.createElement("button"); lb.dataset.v = "lidar"; lb.textContent = state.lidar?.ok ? "Lidar" : "Measure with lidar";
+  const lb = document.createElement("button"); lb.type = "button"; lb.dataset.v = "lidar"; lb.textContent = state.lidar?.ok ? "Lidar" : "Measure with lidar";
   lb.onclick = async () => {
     if (state.lidar?.ok) { state.pitch = "lidar"; render(); return; }
     lb.disabled = true; lb.textContent = "Reading lidar…";
     try {
       const proj = projector(state.geo.lon, state.geo.lat);
       state.lidar = await lidarPitch(state.ring, proj, (b) => { lb.textContent = `Reading lidar… ${(b / 1048576).toFixed(1)} MB`; });
-    } catch (e) { state.lidar = { ok: false, reason: "lidar failed: " + e.message }; }
+    } catch (e) { state.lidar = { ok: false, reason: "Could not measure pitch with lidar: " + e.message }; }
     if (state.lidar.ok) { state.pitch = "lidar"; addSource(`USGS 3DEP lidar point cloud ${state.lidar.dataset} (${state.lidar.kb} KB read)`, "https://registry.opendata.aws/usgs-lidar/"); }
     chips(); render();
   };
   $("pitch").appendChild(lb);
-  for (let p = 3; p <= 12; p++) { const b = document.createElement("button"); b.textContent = p + "/12"; b.dataset.v = String(p);
+  for (let p = 3; p <= 12; p++) { const b = document.createElement("button"); b.type = "button"; b.textContent = p + "/12"; b.dataset.v = String(p);
     b.onclick = () => { state.pitch = String(p); state.userPitch = true; render(); }; $("pitch").appendChild(b); }
 }
 function addSource(text, href) { const li = document.createElement("li"); if (href) { const a = document.createElement("a"); a.href = href; a.target = "_blank"; a.rel = "noopener"; a.textContent = text; li.appendChild(a); } else li.textContent = text; $("r-src").appendChild(li); }
@@ -424,27 +449,44 @@ function drawOutline(ringM, parcelM) {
   </svg>`;
 }
 
-async function run() {
-  const addr = $("addr").value.trim(); if (!addr) return;
-  $("go").disabled = true; statusUl.innerHTML = ""; $("result").style.display = "none"; $("r-src").innerHTML = "";
+let running = false;
+async function run(ev) {
+  if (ev && ev.preventDefault) ev.preventDefault();
+  const addr = $("addr").value.trim();
+  if (!addr) { showFail("Type a street address to measure the roof."); return; }
+  if (running) return;
+  running = true;
+  $("go").disabled = true; statusUl.innerHTML = ""; showFail(""); $("result").style.display = "none"; $("r-src").innerHTML = ""; window.__result = null;
   Object.assign(state, { lidar: null, pitch: String(DEFAULT_PITCH), userPitch: false });
-  history.replaceState(null, "", "?a=" + encodeURIComponent(addr));
+  const next = new URL(location.href);
+  next.searchParams.set("a", addr);
+  history.replaceState(null, "", next.pathname + next.search + next.hash);
   try {
     const pa = parseAddr(addr);
     let s = step("Finding the address");
-    let geo = null; try { geo = await geocode(addr); s.ok(`Address found (${geo.src})`); } catch (e) { s.bad("Geocoder could not find it; trying county parcels"); }
+    let geo = null; try { geo = await geocode(addr); s.ok(`Address found (${geo.src})`); } catch (e) { s.bad(e.message + " Trying county parcels."); }
     s = step("Looking up the county parcel");
-    const parcel = await parcelLookup(pa, geo);
-    if (parcel) s.ok(`Parcel ${parcel.apn} found (${parcel.county})`); else s.bad("No parcel match (only San Diego and Riverside counties are wired in)");
+    let parcel = await parcelLookup(pa, geo);
+    if (parcel && parcel.error) { s.bad(parcel.error); parcel = null; }
+    else if (parcel) s.ok(`Parcel ${parcel.apn} found (${parcel.county})`);
+    else s.bad("No parcel match (only San Diego and Riverside counties are wired in)");
     let ref = geo;
     if (parcel) { const c = parcel.ring.slice(0, -1); ref = { lon: c.reduce((a, p) => a + p[0], 0) / c.length, lat: c.reduce((a, p) => a + p[1], 0) / c.length, src: geo?.src }; }
-    if (!ref) throw new Error("Could not locate this address.");
+    if (!ref) throw new Error("Could not locate this address. Check the spelling, include the city, and try again.");
     const proj = projector(ref.lon, ref.lat);
     let radius = 60; if (parcel) { const b = bbox(parcel.ring.map(proj.fwd)); radius = Math.max(40, Math.hypot(b[2] - b[0], b[3] - b[1]) / 2 + 15); }
     const bb = [proj.inv([-radius, -radius]), proj.inv([radius, radius])]; const bboxLL = [bb[0][0], bb[0][1], bb[1][0], bb[1][1]];
     s = step("Finding the roof outline");
     const [osm, ov] = await Promise.allSettled([osmBuildings(ref.lon, ref.lat, radius), overtureBuildings(bboxLL)]);
     const cands = [...(osm.status === "fulfilled" ? osm.value : []), ...(ov.status === "fulfilled" ? ov.value : [])];
+    if (!cands.length) {
+      const why = [
+        osm.status !== "fulfilled" ? "OpenStreetMap was busy or blocked" : "no OpenStreetMap outline",
+        ov.status !== "fulfilled" ? ("the building map failed" + (ov.reason && ov.reason.message ? " (" + ov.reason.message + ")" : "")) : "no Overture outline",
+      ].join("; ");
+      s.bad("No building outline found here");
+      throw new Error("No building outline found near this address (" + why + "). Try again in a moment.");
+    }
     const pick = choose(cands, parcel, ref, pa, proj);
     if (!pick) { s.bad("No building outline found here"); throw new Error("No building outline found near this address in OpenStreetMap or Overture."); }
     s.ok(`Outline found (${pick.source})`);
@@ -463,10 +505,10 @@ async function run() {
     chips(); render(); $("result").style.display = "block";
     window.__result = { plan: state.plan, source: pick.source, conf: pick.conf, why: pick.why, apn: parcel?.apn, osm: osm.status, overture: ov.status, geo: geo?.src };
   } catch (e) {
-    step(e.message).bad(); window.__result = { error: e.message };
-  } finally { $("go").disabled = false; }
+    const msg = e.message || "Something went wrong while measuring this roof. Try again.";
+    step(msg).bad(); showFail(msg); window.__result = { error: msg };
+  } finally { running = false; $("go").disabled = false; }
 }
-$("go").onclick = run;
-$("addr").addEventListener("keydown", (e) => { if (e.key === "Enter") run(); });
+$("form").addEventListener("submit", run);
 const qa = new URLSearchParams(location.search).get("a");
 if (qa) { $("addr").value = qa; run(); }
