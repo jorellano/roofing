@@ -464,7 +464,7 @@ async function run(ev) {
   try {
     const pa = parseAddr(addr);
     let s = step("Finding the address");
-    let geo = null; try { geo = await geocode(addr); s.ok(`Address found (${geo.src})`); } catch (e) { s.bad(e.message + " Trying county parcels."); }
+    let geo = null; try { geo = await geocode(addr); } catch (e) { s.bad(e.message + " Trying county parcels."); }
     s = step("Looking up the county parcel");
     let parcel = await parcelLookup(pa, geo);
     if (parcel && parcel.error) { s.bad(parcel.error); parcel = null; }
@@ -489,7 +489,7 @@ async function run(ev) {
     }
     const pick = choose(cands, parcel, ref, pa, proj);
     if (!pick) { s.bad("No building outline found here"); throw new Error("No building outline found near this address in OpenStreetMap or Overture."); }
-    s.ok(`Outline found (${pick.source})`);
+    // outline found (not shown)
     const ringM = pick.ring.map(proj.fwd);
     state.plan = Math.abs(ringArea(ringM)) * SQFT; state.ring = pick.ring; state.geo = ref;
     $("r-addr").textContent = parcel ? `${parcel.situs} · APN ${parcel.apn}` : addr;
