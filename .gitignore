@@ -1,0 +1,43 @@
+# Secrets and credentials — do not commit these
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.keystore
+id_rsa
+id_rsa.*
+id_ed25519
+id_ed25519.*
+id_dsa
+id_dsa.*
+*.secret
+*credentials*.json
+*service-account*.json
+secrets/
+credentials/
+
+# Dependencies
+node_modules/
+
+# OS and editor junk
+.DS_Store
+Thumbs.db
+Desktop.ini
+*~
+*.swp
+*.swo
+.idea/
+.vscode/
+*.iml
+
+# Build caches
+.cache/
+.parcel-cache/
+.turbo/
+.next/
+coverage/
+dist/
+build/
